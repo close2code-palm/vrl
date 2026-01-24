@@ -3,7 +3,7 @@ use chrono::{TimeZone as _, Utc};
 use std::str::FromStr;
 
 fn from_unix_timestamp(value: Value, unit: Unit) -> Resolved {
-    use Value::Integer;
+    use Value::{Float, Integer};
 
     let value = match value {
         Integer(v) => match unit {
@@ -21,6 +21,28 @@ fn from_unix_timestamp(value: Value, unit: Unit) -> Resolved {
             },
             Unit::Nanoseconds => Utc.timestamp_nanos(v).into(),
         },
+        Float(v) => {
+            let coefficient;
+            match unit {
+                Unit::Seconds => {
+                    coefficient = 1_000_000_000f64
+                }
+                Unit::Milliseconds => {
+                    coefficient = 1_000_000f64
+                },
+                Unit::Microseconds => {
+                    coefficient = 1_000f64
+                },
+                Unit::Nanoseconds => {
+                    coefficient = 1f64
+                }
+            }
+            let nanoseconds = coefficient * v.into_inner() as f64;
+            if nanoseconds > i64::MAX as f64 {
+                return Err(format!("unable to coerce {v} into timestamp").into());
+            }
+            Utc.timestamp_nanos(nanoseconds.trunc() as i64).into()
+        }
         v => return Err(format!("unable to coerce {} into timestamp", v.kind()).into()),
     };
     Ok(value)
@@ -63,6 +85,11 @@ impl Function for FromUnixTimestamp {
                 title: "Convert from a Unix timestamp (seconds)",
                 source: "from_unix_timestamp!(5)",
                 result: Ok("t'1970-01-01T00:00:05Z'"),
+            },
+            example! {
+                title: "Convert from a Unix timestamp (seconds)",
+                source: "from_unix_timestamp!(42.1)",
+                result: Ok("t'1970-01-01T00:00:42.100000Z'"),
             },
             example! {
                 title: "Convert from a Unix timestamp (milliseconds)",
@@ -191,6 +218,20 @@ mod tests {
         assert_eq!(string, "unable to coerce 9999999999999 into timestamp");
     }
 
+    #[test]
+    fn out_of_range_float() {
+        let mut object: Value = BTreeMap::new().into();
+        let mut runtime_state = state::RuntimeState::default();
+        let tz = TimeZone::default();
+        let mut ctx = Context::new(&mut object, &mut runtime_state, &tz);
+        let f = FromUnixTimestampFn {
+            value: Box::new(Literal::Float(NotNan::new(9_999_999_999.999).unwrap())),
+            unit: Unit::default(),
+        };
+        let string = f.resolve(&mut ctx).err().unwrap().message();
+        assert_eq!(string, "unable to coerce 9999999999.999 into timestamp");
+    }
+
     test_function![
         from_unix_timestamp => FromUnixTimestamp;
 
@@ -224,15 +265,27 @@ mod tests {
             tdef: TypeDef::timestamp().fallible(),
         }
 
-        float_type_invalid {
-            args: func_args![value: 5.123],
-            want: Err("unable to coerce float into timestamp"),
+        float {
+            args: func_args![value: 1.23456789],
+            want: Ok(Utc.timestamp_nanos(1_234_567_890)),
             tdef: TypeDef::timestamp().fallible(),
         }
 
-        float_type_invalid_milliseconds {
+        float_milliseconds {
             args: func_args![value: 5.123, unit: "milliseconds"],
-            want: Err("unable to coerce float into timestamp"),
+            want: Ok(Utc.timestamp_nanos(5_123_000)),
+            tdef: TypeDef::timestamp().fallible(),
+        }
+
+        float_miscroseconds {
+            args: func_args![value: 8.5323, unit: "microseconds"],
+            want: Ok(Utc.timestamp_nanos(8_532)),
+            tdef: TypeDef::timestamp().fallible(),
+        }
+
+        float_nanoseconds {
+            args: func_args![value: 5.123, unit: "nanoseconds"],
+            want: Ok(Utc.timestamp_nanos(5)),
             tdef: TypeDef::timestamp().fallible(),
         }
 
