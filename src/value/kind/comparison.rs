@@ -234,7 +234,6 @@ impl Kind {
     /// # Errors
     /// If the type is not a superset, a path to one field that doesn't match is returned.
     /// This is mostly useful for debugging.
-    #[allow(clippy::nursery)]
     pub fn is_superset(&self, other: &Self) -> Result<(), OwnedValuePath> {
         if let (None, Some(())) = (self.bytes, other.bytes) {
             return Err(OwnedValuePath::root());
