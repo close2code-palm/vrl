@@ -208,7 +208,6 @@ impl Kind {
 
     /// Returns `true` if at most one type is set.
     #[must_use]
-    #[allow(clippy::many_single_char_names)]
     pub const fn is_exact(&self) -> bool {
         self.is_bytes()
             || self.is_integer()
