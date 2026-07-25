@@ -191,8 +191,9 @@ impl Formatter {
             let next = self.tokens.get(index + 1).cloned();
             match self.tokens[index].clone() {
                 Token::Word(word) | Token::Literal(word) => self.word(&word, previous.as_ref()),
-                Token::Comment(comment) => self.comment(&comment),
-                Token::Newline => self.newline(),
+                Token::Comment(comment) => self.comment(&comment, next.as_ref()),
+                Token::Newline => self
+                    .source_newline(previous.is_none() || matches!(previous, Some(Token::Newline))),
                 Token::Open(delimiter) => self.open(delimiter, next.as_ref()),
                 Token::Close(delimiter) => self.close(delimiter),
                 Token::Comma => {
@@ -258,12 +259,18 @@ impl Formatter {
         self.write(word);
     }
 
-    fn comment(&mut self, comment: &str) {
+    fn comment(&mut self, comment: &str, next: Option<&Token>) {
         if !self.line_start {
             self.space();
         }
         self.write(comment);
-        self.newline();
+
+        // A comment ends at the source newline. Let that token emit the line
+        // break so consecutive source newlines remain observable. At EOF, the
+        // formatter still terminates the final comment below.
+        if !matches!(next, Some(Token::Newline)) {
+            self.newline();
+        }
     }
 
     fn open(&mut self, delimiter: char, next: Option<&Token>) {
@@ -272,9 +279,11 @@ impl Formatter {
             self.space();
         }
         self.write(&delimiter.to_string());
-        if delimiter == '{' && !matches!(next, Some(Token::Close('}'))) {
+        if delimiter == '{' && !matches!(next, Some(Token::Close('}')) | Some(Token::Comment(_))) {
             self.indent += 1;
             self.newline();
+        } else if delimiter == '{' && matches!(next, Some(Token::Comment(_))) {
+            self.indent += 1;
         }
     }
 
@@ -346,6 +355,19 @@ impl Formatter {
         }
     }
 
+    fn source_newline(&mut self, preserves_empty_line: bool) {
+        self.trim_space();
+        if self.line_start && preserves_empty_line {
+            // Unlike formatter-inserted newlines, a source newline at the
+            // start of a line represents an intentionally empty line when it
+            // follows another source newline (or starts the source).
+            self.output.push('\n');
+        } else if !self.line_start {
+            self.output.push('\n');
+            self.line_start = true;
+        }
+    }
+
     fn column(&self) -> usize {
         self.output
             .rsplit_once('\n')
@@ -383,6 +405,23 @@ mod tests {
         let source = r#".message="{ # not a comment }" # a real comment"#;
         let expected = r#".message = "{ # not a comment }" # a real comment
 "#;
+
+        assert_eq!(format(source).unwrap(), expected);
+    }
+
+    #[test]
+    fn preserves_empty_lines_and_inline_comments() {
+        let source =
+            ".first=1 # keep with first\n\n\n# separate section\n.second=2 # keep with second";
+        let expected = ".first = 1 # keep with first\n\n\n# separate section\n.second = 2 # keep with second\n";
+
+        assert_eq!(format(source).unwrap(), expected);
+    }
+
+    #[test]
+    fn preserves_inline_comment_after_opening_brace() {
+        let source = "if .ok { # explain condition\n.value=1\n}";
+        let expected = "if .ok { # explain condition\n    .value = 1\n}\n";
 
         assert_eq!(format(source).unwrap(), expected);
     }
