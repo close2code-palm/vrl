@@ -21,7 +21,7 @@ pub fn format(source: &str) -> Result<String, FormatError> {
     Ok(Formatter::new(tokenize(source)).format())
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Token {
     Word(String),
     Literal(String),
@@ -83,11 +83,11 @@ fn tokenize(source: &str) -> Vec<Token> {
             }
             '!' => tokens.push(Token::Bang),
             '=' | '|' | '+' | '-' | '*' | '/' | '<' | '>' | '?' => {
-                let end = consume_operator(source, start, ch, &mut chars);
+                let end = consume_operator(start, ch, &mut chars);
                 tokens.push(Token::Operator(source[start..end].to_owned()));
             }
             _ => {
-                let end = consume_word(source, start, &mut chars);
+                let end = consume_word(source, &mut chars);
                 tokens.push(Token::Word(source[start..end].to_owned()));
             }
         }
@@ -132,7 +132,6 @@ fn consume_quoted(
 }
 
 fn consume_operator(
-    source: &str,
     start: usize,
     first: char,
     chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
@@ -152,11 +151,7 @@ fn consume_operator(
     }
 }
 
-fn consume_word(
-    source: &str,
-    start: usize,
-    chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-) -> usize {
+fn consume_word(source: &str, chars: &mut std::iter::Peekable<std::str::CharIndices<'_>>) -> usize {
     let mut end = source.len();
     while let Some((index, ch)) = chars.peek().copied() {
         if ch.is_whitespace() || "#()[]{} ,:;.%!&=|+-*/<>?\"".contains(ch) {
@@ -191,14 +186,15 @@ impl Formatter {
         for index in 0..self.tokens.len() {
             let previous = index
                 .checked_sub(1)
-                .and_then(|index| self.tokens.get(index));
-            let next = self.tokens.get(index + 1);
-            match &self.tokens[index] {
-                Token::Word(word) | Token::Literal(word) => self.word(word, previous),
-                Token::Comment(comment) => self.comment(comment),
+                .and_then(|index| self.tokens.get(index))
+                .cloned();
+            let next = self.tokens.get(index + 1).cloned();
+            match self.tokens[index].clone() {
+                Token::Word(word) | Token::Literal(word) => self.word(&word, previous.as_ref()),
+                Token::Comment(comment) => self.comment(&comment),
                 Token::Newline => self.newline(),
-                Token::Open(delimiter) => self.open(*delimiter, next),
-                Token::Close(delimiter) => self.close(*delimiter),
+                Token::Open(delimiter) => self.open(delimiter, next.as_ref()),
+                Token::Close(delimiter) => self.close(delimiter),
                 Token::Comma => {
                     self.trim_space();
                     self.output.push(',');
@@ -214,11 +210,8 @@ impl Formatter {
                     self.output.push(';');
                     self.newline();
                 }
-                Token::Operator(operator) => self.operator(operator),
-                Token::Dot => {
-                    self.trim_space();
-                    self.write(".");
-                }
+                Token::Operator(operator) => self.operator(&operator),
+                Token::Dot => self.dot(previous.as_ref()),
                 Token::Bang => {
                     self.trim_space();
                     self.write("!");
@@ -310,6 +303,15 @@ impl Formatter {
         }
     }
 
+    fn dot(&mut self, previous: Option<&Token>) {
+        if matches!(previous, Some(Token::Word(word)) if word == "if") {
+            self.space();
+        } else {
+            self.trim_space();
+        }
+        self.write(".");
+    }
+
     fn write(&mut self, value: &str) {
         if self.line_start {
             for _ in 0..self.indent {
@@ -373,7 +375,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_source() {
-        assert!(format("if {").is_err());
+        assert!(format("a(r')").is_err());
     }
 
     #[test]
