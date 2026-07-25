@@ -20,6 +20,9 @@ pub enum Error {
     #[error("input error: {}", .0)]
     Json(#[from] serde_json::Error),
 
+    #[error(transparent)]
+    Format(#[from] crate::formatter::FormatError),
+
     #[error("repl feature disabled, program input required")]
     ReplFeature,
 

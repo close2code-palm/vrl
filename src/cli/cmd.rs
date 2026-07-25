@@ -1,10 +1,11 @@
 use crate::compiler::TargetValueRef;
 use std::{
     collections::BTreeMap,
-    fs::File,
-    io::{self, Read},
+    ffi::OsString,
+    fs::{self, File, OpenOptions},
+    io::{self, Read, Write},
     iter::IntoIterator,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use crate::compiler::TimeZone;
@@ -59,6 +60,73 @@ pub struct Opts {
     // Should the CLI emit warnings
     #[arg(long = "print-warnings")]
     print_warnings: bool,
+}
+
+#[derive(Parser, Debug)]
+#[command(about = "Format a VRL file")]
+pub struct FmtOpts {
+    /// Exit with a non-zero status instead of writing when formatting is needed.
+    #[arg(long)]
+    pub check: bool,
+
+    /// The VRL source file to format.
+    pub file: PathBuf,
+}
+
+/// Formats one VRL source file and returns whether its contents changed.
+pub fn fmt(opts: &FmtOpts) -> Result<bool, Error> {
+    let source = fs::read_to_string(&opts.file)?;
+    let formatted = crate::formatter::format(&source)?;
+    let changed = source != formatted;
+
+    if changed && !opts.check {
+        replace_file(&opts.file, &formatted)?;
+    }
+
+    Ok(changed)
+}
+
+fn replace_file(path: &Path, contents: &str) -> Result<(), Error> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("vrl"));
+    let temporary = temporary_path(parent, file_name)?;
+
+    let write_result = (|| -> Result<(), std::io::Error> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        Ok(())
+    })();
+
+    if write_result.is_err() {
+        let _removed = fs::remove_file(&temporary);
+    }
+
+    write_result.map_err(Into::into)
+}
+
+fn temporary_path(parent: &Path, file_name: &std::ffi::OsStr) -> Result<PathBuf, Error> {
+    for attempt in 0..100_u8 {
+        let mut name = OsString::from(".");
+        name.push(file_name);
+        name.push(format!(".vrl-fmt-{}-{attempt}", std::process::id()));
+        let candidate = parent.join(name);
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "unable to create a temporary formatter file",
+    )
+    .into())
 }
 
 impl Opts {
@@ -248,4 +316,48 @@ fn read<R: Read>(mut reader: R) -> Result<String, Error> {
 
 fn default_objects() -> Vec<Value> {
     vec![Value::Object(BTreeMap::new())]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use super::{FmtOpts, fmt};
+
+    fn temporary_file(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("vrl-{name}-{}.vrl", std::process::id()))
+    }
+
+    #[test]
+    fn fmt_rewrites_changed_file() {
+        let file = temporary_file("fmt-rewrites");
+        fs::write(&file, ".value=1+2").unwrap();
+
+        let changed = fmt(&FmtOpts {
+            check: false,
+            file: file.clone(),
+        })
+        .unwrap();
+
+        assert!(changed);
+        assert_eq!(fs::read_to_string(&file).unwrap(), ".value = 1 + 2\n");
+        fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn fmt_check_does_not_rewrite_file() {
+        let file = temporary_file("fmt-check");
+        let source = ".value=1+2";
+        fs::write(&file, source).unwrap();
+
+        let changed = fmt(&FmtOpts {
+            check: true,
+            file: file.clone(),
+        })
+        .unwrap();
+
+        assert!(changed);
+        assert_eq!(fs::read_to_string(&file).unwrap(), source);
+        fs::remove_file(file).unwrap();
+    }
 }

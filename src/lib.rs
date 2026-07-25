@@ -20,6 +20,9 @@ pub mod diagnostic;
 #[cfg(feature = "compiler")]
 pub mod parser;
 
+#[cfg(feature = "compiler")]
+pub mod formatter;
+
 #[cfg(feature = "stdlib-base")]
 pub mod core;
 
