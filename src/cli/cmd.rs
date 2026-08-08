@@ -18,7 +18,7 @@ use crate::diagnostic::Formatter;
 use crate::owned_metadata_path;
 use crate::value::Secrets;
 use crate::value::Value;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use super::Error;
 use super::repl::Repl;
@@ -26,6 +26,9 @@ use super::repl::Repl;
 #[derive(Parser, Debug)]
 #[command(name = "VRL", about = "Vector Remap Language CLI")]
 pub struct Opts {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// The VRL program to execute. The program ".foo = true", for example, sets the event object's
     /// `foo` field to `true`.
     #[arg(id = "PROGRAM")]
@@ -61,6 +64,12 @@ pub struct Opts {
     print_warnings: bool,
 }
 
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    /// Format a VRL source file.
+    Fmt(FmtOpts),
+}
+
 #[derive(Parser, Debug)]
 #[command(about = "Format a VRL file")]
 pub struct FmtOpts {
@@ -83,6 +92,27 @@ pub fn fmt(opts: &FmtOpts) -> Result<bool, Error> {
     }
 
     Ok(changed)
+}
+
+#[must_use]
+pub fn fmt_cmd(opts: &FmtOpts) -> exitcode::ExitCode {
+    match fmt(opts) {
+        Ok(true) if opts.check => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("{} needs formatting", opts.file.display());
+            }
+            exitcode::DATAERR
+        }
+        Ok(_) => exitcode::OK,
+        Err(error) => {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("{error}");
+            }
+            exitcode::SOFTWARE
+        }
+    }
 }
 
 fn replace_file(path: &Path, contents: &str) -> Result<(), Error> {
