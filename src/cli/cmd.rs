@@ -1,8 +1,7 @@
 use crate::compiler::TargetValueRef;
 use std::{
     collections::BTreeMap,
-    ffi::OsString,
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read, Write},
     iter::IntoIterator,
     path::{Path, PathBuf},
@@ -87,46 +86,9 @@ pub fn fmt(opts: &FmtOpts) -> Result<bool, Error> {
 }
 
 fn replace_file(path: &Path, contents: &str) -> Result<(), Error> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("vrl"));
-    let temporary = temporary_path(parent, file_name)?;
-
-    let write_result = (|| -> Result<(), std::io::Error> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&temporary, path)?;
-        Ok(())
-    })();
-
-    if write_result.is_err() {
-        let _removed = fs::remove_file(&temporary);
-    }
-
-    write_result.map_err(Into::into)
-}
-
-fn temporary_path(parent: &Path, file_name: &std::ffi::OsStr) -> Result<PathBuf, Error> {
-    for attempt in 0..100_u8 {
-        let mut name = OsString::from(".");
-        name.push(file_name);
-        name.push(format!(".vrl-fmt-{}-{attempt}", std::process::id()));
-        let candidate = parent.join(name);
-        if !candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "unable to create a temporary formatter file",
-    )
-    .into())
+    let mut file = File::create(path)?;
+    file.write_all(contents.as_bytes())?;
+    Ok(())
 }
 
 impl Opts {
